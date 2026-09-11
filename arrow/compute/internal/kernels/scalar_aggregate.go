@@ -410,6 +410,13 @@ func appendDecimalKernels(dst []exec.ScalarAggregateKernel, resolver exec.TypeRe
 	return dst
 }
 
+// appendFixedSizeBinaryAggKernels appends a fixed-size-binary kernel using a
+// type-id matcher so any byte-width matches.
+func appendFixedSizeBinaryAggKernels(dst []exec.ScalarAggregateKernel, resolver exec.TypeResolver, init exec.KernelInitFn, ordered bool) []exec.ScalarAggregateKernel {
+	dst = append(dst, aggKernelMatchedComputed(exec.SameTypeID(arrow.FIXED_SIZE_BINARY), resolver, init, ordered))
+	return dst
+}
+
 func aggKernelMatched(matcher exec.TypeMatcher, out exec.OutputType, init exec.KernelInitFn, ordered bool) exec.ScalarAggregateKernel {
 	return exec.NewScalarAggregateKernel(
 		[]exec.InputType{exec.NewMatchedInput(matcher)},

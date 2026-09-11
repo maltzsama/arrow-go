@@ -141,6 +141,42 @@ func orderedAccessorFor(dt arrow.DataType) (orderedAccessor, error) {
 		return numericAccessor[arrow.Duration](dt, func(a, b arrow.Duration) bool { return a < b }, func(v arrow.Duration) scalar.Scalar { return scalar.NewDurationScalar(v, dt) }, func(sc scalar.Scalar) arrow.Duration { return sc.(*scalar.Duration).Value }), nil
 	case arrow.INTERVAL_MONTHS:
 		return numericAccessor[arrow.MonthInterval](dt, func(a, b arrow.MonthInterval) bool { return a < b }, func(v arrow.MonthInterval) scalar.Scalar { return scalar.NewMonthIntervalScalar(v) }, func(sc scalar.Scalar) arrow.MonthInterval { return sc.(*scalar.MonthInterval).Value }), nil
+	case arrow.INTERVAL_DAY_TIME:
+		return orderedAccessor{
+			childType: dt,
+			iter: func(s *exec.ArraySpan, fn func(any)) {
+				fixedIter[arrow.DayTimeInterval](s, func(v arrow.DayTimeInterval) { fn(v) })
+			},
+			at: func(s *exec.ArraySpan, i int64) any {
+				return exec.GetSpanValues[arrow.DayTimeInterval](s, 1)[i]
+			},
+			less:  func(a, b any) bool { return a.(arrow.DayTimeInterval).Cmp(b.(arrow.DayTimeInterval)) < 0 },
+			equal: func(a, b any) bool { return a.(arrow.DayTimeInterval).Cmp(b.(arrow.DayTimeInterval)) == 0 },
+			toScalar: func(v any) scalar.Scalar {
+				return scalar.NewDayTimeIntervalScalar(v.(arrow.DayTimeInterval))
+			},
+			fromScalar: func(sc scalar.Scalar) any {
+				return sc.(*scalar.DayTimeInterval).Value
+			},
+		}, nil
+	case arrow.INTERVAL_MONTH_DAY_NANO:
+		return orderedAccessor{
+			childType: dt,
+			iter: func(s *exec.ArraySpan, fn func(any)) {
+				fixedIter[arrow.MonthDayNanoInterval](s, func(v arrow.MonthDayNanoInterval) { fn(v) })
+			},
+			at: func(s *exec.ArraySpan, i int64) any {
+				return exec.GetSpanValues[arrow.MonthDayNanoInterval](s, 1)[i]
+			},
+			less:  func(a, b any) bool { return a.(arrow.MonthDayNanoInterval).Cmp(b.(arrow.MonthDayNanoInterval)) < 0 },
+			equal: func(a, b any) bool { return a.(arrow.MonthDayNanoInterval).Cmp(b.(arrow.MonthDayNanoInterval)) == 0 },
+			toScalar: func(v any) scalar.Scalar {
+				return scalar.NewMonthDayNanoIntervalScalar(v.(arrow.MonthDayNanoInterval))
+			},
+			fromScalar: func(sc scalar.Scalar) any {
+				return sc.(*scalar.MonthDayNanoInterval).Value
+			},
+		}, nil
 	case arrow.STRING, arrow.LARGE_STRING, arrow.BINARY, arrow.LARGE_BINARY:
 		return binaryAccessor(dt)
 	case arrow.FIXED_SIZE_BINARY:
@@ -248,6 +284,8 @@ func orderedTypes() []arrow.DataType {
 	types = append(types, arrow.FixedWidthTypes.Duration_s, arrow.FixedWidthTypes.Duration_ms,
 		arrow.FixedWidthTypes.Duration_us, arrow.FixedWidthTypes.Duration_ns)
 	types = append(types, arrow.FixedWidthTypes.MonthInterval)
+	types = append(types, arrow.FixedWidthTypes.DayTimeInterval)
+	types = append(types, arrow.FixedWidthTypes.MonthDayNanoInterval)
 	types = append(types, baseBinaryTypes...)
 	return types
 }
@@ -939,6 +977,9 @@ func minMaxKernels() (mm, mn, mx []exec.ScalarAggregateKernel) {
 	mm = appendDecimalKernels(mm, minMaxOutType, makeMinMaxInit(-1), false)
 	mn = appendDecimalKernels(mn, identityOutType, makeMinMaxInit(0), false)
 	mx = appendDecimalKernels(mx, identityOutType, makeMinMaxInit(1), false)
+	mm = appendFixedSizeBinaryAggKernels(mm, minMaxOutType, makeMinMaxInit(-1), false)
+	mn = appendFixedSizeBinaryAggKernels(mn, identityOutType, makeMinMaxInit(0), false)
+	mx = appendFixedSizeBinaryAggKernels(mx, identityOutType, makeMinMaxInit(1), false)
 	return
 }
 
@@ -1173,6 +1214,9 @@ func firstLastKernels() (fl, first, last []exec.ScalarAggregateKernel) {
 	fl = appendDecimalKernels(fl, firstLastOutType, makeFirstLastInit(-1), true)
 	first = appendDecimalKernels(first, identityOutType, makeFirstLastInit(0), true)
 	last = appendDecimalKernels(last, identityOutType, makeFirstLastInit(1), true)
+	fl = appendFixedSizeBinaryAggKernels(fl, firstLastOutType, makeFirstLastInit(-1), true)
+	first = appendFixedSizeBinaryAggKernels(first, identityOutType, makeFirstLastInit(0), true)
+	last = appendFixedSizeBinaryAggKernels(last, identityOutType, makeFirstLastInit(1), true)
 	return
 }
 
@@ -1263,6 +1307,7 @@ func indexKernels() []exec.ScalarAggregateKernel {
 	}
 	out = append(out, aggKernelMatched(exec.SameTypeID(arrow.DECIMAL128), exec.NewOutputType(arrow.PrimitiveTypes.Int64), initIndex, true))
 	out = append(out, aggKernelMatched(exec.SameTypeID(arrow.DECIMAL256), exec.NewOutputType(arrow.PrimitiveTypes.Int64), initIndex, true))
+	out = append(out, aggKernelMatched(exec.SameTypeID(arrow.FIXED_SIZE_BINARY), exec.NewOutputType(arrow.PrimitiveTypes.Int64), initIndex, true))
 	return out
 }
 
