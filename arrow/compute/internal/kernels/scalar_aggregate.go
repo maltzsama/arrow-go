@@ -402,10 +402,24 @@ func identityOutType(_ *exec.KernelCtx, types []arrow.DataType) (arrow.DataType,
 	return types[0], nil
 }
 
+// appendDecimalKernels appends decimal128/256 kernels using a type-id matcher
+// so any precision/scale matches.
+func appendDecimalKernels(dst []exec.ScalarAggregateKernel, resolver exec.TypeResolver, init exec.KernelInitFn, ordered bool) []exec.ScalarAggregateKernel {
+	dst = append(dst, aggKernelMatchedComputed(exec.SameTypeID(arrow.DECIMAL128), resolver, init, ordered))
+	dst = append(dst, aggKernelMatchedComputed(exec.SameTypeID(arrow.DECIMAL256), resolver, init, ordered))
+	return dst
+}
+
 func aggKernelMatched(matcher exec.TypeMatcher, out exec.OutputType, init exec.KernelInitFn, ordered bool) exec.ScalarAggregateKernel {
 	return exec.NewScalarAggregateKernel(
 		[]exec.InputType{exec.NewMatchedInput(matcher)},
 		out, init, scalarAggConsume, scalarAggMerge, scalarAggFinalize, ordered)
+}
+
+func aggKernelMatchedComputed(matcher exec.TypeMatcher, resolver exec.TypeResolver, init exec.KernelInitFn, ordered bool) exec.ScalarAggregateKernel {
+	return exec.NewScalarAggregateKernel(
+		[]exec.InputType{exec.NewMatchedInput(matcher)},
+		exec.NewComputedOutputType(resolver), init, scalarAggConsume, scalarAggMerge, scalarAggFinalize, ordered)
 }
 
 // ScalarAggregateKernels holds the kernels for all scalar aggregate functions.

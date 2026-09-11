@@ -24,10 +24,29 @@ import (
 
 	"github.com/apache/arrow-go/v18/arrow"
 	"github.com/apache/arrow-go/v18/arrow/compute/exec"
+	"github.com/apache/arrow-go/v18/arrow/decimal128"
+	"github.com/apache/arrow-go/v18/arrow/decimal256"
 	"github.com/apache/arrow-go/v18/arrow/float16"
 	"github.com/apache/arrow-go/v18/arrow/memory"
 	"github.com/apache/arrow-go/v18/arrow/scalar"
 )
+
+// widenDecimalType returns the maximum-precision decimal type with the same
+// scale as the input, matching the C++ WidenDecimalToMaxPrecision helper.
+func widenDecimalType(dt arrow.DataType) (arrow.DataType, error) {
+	switch t := dt.(type) {
+	case *arrow.Decimal128Type:
+		return &arrow.Decimal128Type{Precision: 38, Scale: t.Scale}, nil
+	case *arrow.Decimal256Type:
+		return &arrow.Decimal256Type{Precision: 76, Scale: t.Scale}, nil
+	default:
+		return nil, fmt.Errorf("%w: expected a decimal type, got %s", arrow.ErrType, dt)
+	}
+}
+
+func decimalWidenOutType(_ *exec.KernelCtx, types []arrow.DataType) (arrow.DataType, error) {
+	return widenDecimalType(types[0])
+}
 
 // ----------------------------------------------------------------------
 // Value accessors
@@ -150,6 +169,16 @@ func orderedAccessorFor(dt arrow.DataType) (orderedAccessor, error) {
 				return string(sc.(*scalar.FixedSizeBinary).Data())
 			},
 		}, nil
+	case arrow.DECIMAL128:
+		return numericAccessor[decimal128.Num](dt,
+			func(a, b decimal128.Num) bool { return a.Cmp(b) < 0 },
+			func(v decimal128.Num) scalar.Scalar { return scalar.NewDecimal128Scalar(v, dt) },
+			func(sc scalar.Scalar) decimal128.Num { return sc.(*scalar.Decimal128).Value }), nil
+	case arrow.DECIMAL256:
+		return numericAccessor[decimal256.Num](dt,
+			func(a, b decimal256.Num) bool { return a.Cmp(b) < 0 },
+			func(v decimal256.Num) scalar.Scalar { return scalar.NewDecimal256Scalar(v, dt) },
+			func(sc scalar.Scalar) decimal256.Num { return sc.(*scalar.Decimal256).Value }), nil
 	default:
 		return orderedAccessor{}, fmt.Errorf("%w: scalar aggregate not implemented for %s", arrow.ErrNotImplemented, dt)
 	}
@@ -320,6 +349,34 @@ func newSumState(dt arrow.DataType, opts ScalarAggregateOptions) (*sumState, err
 		return floatSum[float32](arrow.PrimitiveTypes.Float64, opts, func(v float32) float64 { return float64(v) }), nil
 	case arrow.FLOAT64:
 		return floatSum[float64](arrow.PrimitiveTypes.Float64, opts, func(v float64) float64 { return v }), nil
+	case arrow.DECIMAL128:
+		outType, err := widenDecimalType(dt)
+		if err != nil {
+			return nil, err
+		}
+		return &sumState{opts: opts, outType: outType,
+			acc: decimal128.Num{},
+			add: func(a, b any) any { return a.(decimal128.Num).Add(b.(decimal128.Num)) },
+			iter: func(s *exec.ArraySpan, fn func(any)) {
+				fixedIter[decimal128.Num](s, func(v decimal128.Num) { fn(v) })
+			},
+			toScalar: func(a any) scalar.Scalar {
+				return scalar.NewDecimal128Scalar(a.(decimal128.Num), outType)
+			}}, nil
+	case arrow.DECIMAL256:
+		outType, err := widenDecimalType(dt)
+		if err != nil {
+			return nil, err
+		}
+		return &sumState{opts: opts, outType: outType,
+			acc: decimal256.Num{},
+			add: func(a, b any) any { return a.(decimal256.Num).Add(b.(decimal256.Num)) },
+			iter: func(s *exec.ArraySpan, fn func(any)) {
+				fixedIter[decimal256.Num](s, func(v decimal256.Num) { fn(v) })
+			},
+			toScalar: func(a any) scalar.Scalar {
+				return scalar.NewDecimal256Scalar(a.(decimal256.Num), outType)
+			}}, nil
 	default:
 		return nil, fmt.Errorf("%w: sum not implemented for %s", arrow.ErrNotImplemented, dt)
 	}
@@ -359,6 +416,8 @@ func sumKernels() []exec.ScalarAggregateKernel {
 	for _, dt := range []arrow.DataType{arrow.FixedWidthTypes.Float16, arrow.PrimitiveTypes.Float32, arrow.PrimitiveTypes.Float64} {
 		out = append(out, aggKernel(dt, exec.NewOutputType(arrow.PrimitiveTypes.Float64), initSum, false))
 	}
+	out = append(out, aggKernelMatchedComputed(exec.SameTypeID(arrow.DECIMAL128), decimalWidenOutType, initSum, false))
+	out = append(out, aggKernelMatchedComputed(exec.SameTypeID(arrow.DECIMAL256), decimalWidenOutType, initSum, false))
 	return out
 }
 
@@ -425,10 +484,14 @@ func initMean(_ *exec.KernelCtx, args exec.KernelInitArgs) (exec.KernelState, er
 	return newMeanState(args.Inputs[0], opts)
 }
 
-func newMeanState(dt arrow.DataType, opts ScalarAggregateOptions) (*meanState, error) {
+func newMeanState(dt arrow.DataType, opts ScalarAggregateOptions) (ScalarAggregator, error) {
 	if dt.ID() == arrow.NULL {
 		return &meanState{opts: opts, outType: arrow.PrimitiveTypes.Float64, isNull: true,
 			iter: func(*exec.ArraySpan, func(any)) {}}, nil
+	}
+	switch dt.ID() {
+	case arrow.DECIMAL128, arrow.DECIMAL256:
+		return newDecimalMeanState(dt, opts)
 	}
 	base := &meanState{opts: opts, outType: arrow.PrimitiveTypes.Float64}
 	switch dt.ID() {
@@ -479,7 +542,106 @@ func meanKernels() []exec.ScalarAggregateKernel {
 	for _, dt := range numericTypes {
 		out = append(out, aggKernel(dt, exec.NewOutputType(arrow.PrimitiveTypes.Float64), initMean, false))
 	}
+	out = append(out, aggKernelMatchedComputed(exec.SameTypeID(arrow.DECIMAL128), decimalWidenOutType, initMean, false))
+	out = append(out, aggKernelMatchedComputed(exec.SameTypeID(arrow.DECIMAL256), decimalWidenOutType, initMean, false))
 	return out
+}
+
+// meanDecimalState accumulates decimal values and divides by the count with
+// round-half-away-from-zero, matching the C++ decimal mean.
+type meanDecimalState struct {
+	opts    ScalarAggregateOptions
+	outType arrow.DataType
+	count   int64
+	nulls   bool
+	sum     any
+	add     func(any, any) any
+	iter    func(*exec.ArraySpan, func(any))
+	divide  func(sum any, count int64) scalar.Scalar
+}
+
+func (s *meanDecimalState) Consume(_ *exec.KernelCtx, span *exec.ExecSpan) error {
+	if len(span.Values) == 0 {
+		return nil
+	}
+	v := &span.Values[0]
+	nulls := valueNullCount(v, span.Len)
+	s.count += span.Len - nulls
+	s.nulls = s.nulls || nulls > 0
+	if !s.opts.SkipNulls && s.nulls {
+		return nil
+	}
+	if v.IsArray() {
+		s.iter(&v.Array, func(x any) { s.sum = s.add(s.sum, x) })
+	}
+	return nil
+}
+
+func (s *meanDecimalState) Merge(_ *exec.KernelCtx, src exec.KernelState) error {
+	o, ok := src.(*meanDecimalState)
+	if !ok {
+		return fmt.Errorf("%w: invalid source state for mean", arrow.ErrInvalid)
+	}
+	s.count += o.count
+	s.sum = s.add(s.sum, o.sum)
+	s.nulls = s.nulls || o.nulls
+	return nil
+}
+
+func (s *meanDecimalState) Finalize(_ *exec.KernelCtx) (scalar.Scalar, error) {
+	if (!s.opts.SkipNulls && s.nulls) || s.count < int64(s.opts.MinCount) || s.count == 0 {
+		return scalar.MakeNullScalar(s.outType), nil
+	}
+	return s.divide(s.sum, s.count), nil
+}
+
+func newDecimalMeanState(dt arrow.DataType, opts ScalarAggregateOptions) (ScalarAggregator, error) {
+	outType, err := widenDecimalType(dt)
+	if err != nil {
+		return nil, err
+	}
+	switch dt.ID() {
+	case arrow.DECIMAL128:
+		return &meanDecimalState{opts: opts, outType: outType,
+			sum: decimal128.Num{},
+			add: func(a, b any) any { return a.(decimal128.Num).Add(b.(decimal128.Num)) },
+			iter: func(s *exec.ArraySpan, fn func(any)) {
+				fixedIter[decimal128.Num](s, func(v decimal128.Num) { fn(v) })
+			},
+			divide: func(sum any, count int64) scalar.Scalar {
+				v := sum.(decimal128.Num)
+				q, r := v.Div(decimal128.FromI64(count))
+				r = r.Abs()
+				if r.Add(r).Cmp(decimal128.FromI64(count)) >= 0 {
+					if v.Sign() >= 0 {
+						q = q.Add(decimal128.FromI64(1))
+					} else {
+						q = q.Sub(decimal128.FromI64(1))
+					}
+				}
+				return scalar.NewDecimal128Scalar(q, outType)
+			}}, nil
+	default:
+		return &meanDecimalState{opts: opts, outType: outType,
+			sum: decimal256.Num{},
+			add: func(a, b any) any { return a.(decimal256.Num).Add(b.(decimal256.Num)) },
+			iter: func(s *exec.ArraySpan, fn func(any)) {
+				fixedIter[decimal256.Num](s, func(v decimal256.Num) { fn(v) })
+			},
+			divide: func(sum any, count int64) scalar.Scalar {
+				v := sum.(decimal256.Num)
+				q, r := v.Div(decimal256.FromI64(count))
+				r = r.Abs()
+				if r.Add(r).Cmp(decimal256.FromI64(count)) >= 0 {
+					if v.Sign() >= 0 {
+						q = q.Add(decimal256.FromI64(1))
+					} else {
+						q = q.Sub(decimal256.FromI64(1))
+					}
+				}
+				return scalar.NewDecimal256Scalar(q, outType)
+			}}, nil
+	}
 }
 
 // ----------------------------------------------------------------------
@@ -589,6 +751,34 @@ func newProductState(dt arrow.DataType, opts ScalarAggregateOptions) (*productSt
 		return floatProduct[float32](opts, func(v float32) float64 { return float64(v) }), nil
 	case arrow.FLOAT64:
 		return floatProduct[float64](opts, func(v float64) float64 { return v }), nil
+	case arrow.DECIMAL128:
+		t := dt.(*arrow.Decimal128Type)
+		one := decimal128.FromI64(1).IncreaseScaleBy(t.Scale)
+		return &productState{opts: opts, outType: dt,
+			acc: one,
+			mul: func(a, b any) any {
+				return a.(decimal128.Num).Mul(b.(decimal128.Num)).ReduceScaleBy(t.Scale, true)
+			},
+			iter: func(s *exec.ArraySpan, fn func(any)) {
+				fixedIter[decimal128.Num](s, func(v decimal128.Num) { fn(v) })
+			},
+			toScalar: func(a any) scalar.Scalar {
+				return scalar.NewDecimal128Scalar(a.(decimal128.Num), dt)
+			}}, nil
+	case arrow.DECIMAL256:
+		t := dt.(*arrow.Decimal256Type)
+		one := decimal256.FromI64(1).IncreaseScaleBy(t.Scale)
+		return &productState{opts: opts, outType: dt,
+			acc: one,
+			mul: func(a, b any) any {
+				return a.(decimal256.Num).Mul(b.(decimal256.Num)).ReduceScaleBy(t.Scale, true)
+			},
+			iter: func(s *exec.ArraySpan, fn func(any)) {
+				fixedIter[decimal256.Num](s, func(v decimal256.Num) { fn(v) })
+			},
+			toScalar: func(a any) scalar.Scalar {
+				return scalar.NewDecimal256Scalar(a.(decimal256.Num), dt)
+			}}, nil
 	default:
 		return nil, fmt.Errorf("%w: product not implemented for %s", arrow.ErrNotImplemented, dt)
 	}
@@ -628,6 +818,8 @@ func productKernels() []exec.ScalarAggregateKernel {
 	for _, dt := range []arrow.DataType{arrow.FixedWidthTypes.Float16, arrow.PrimitiveTypes.Float32, arrow.PrimitiveTypes.Float64} {
 		out = append(out, aggKernel(dt, exec.NewOutputType(arrow.PrimitiveTypes.Float64), initProduct, false))
 	}
+	out = append(out, aggKernelMatchedComputed(exec.SameTypeID(arrow.DECIMAL128), identityOutType, initProduct, false))
+	out = append(out, aggKernelMatchedComputed(exec.SameTypeID(arrow.DECIMAL256), identityOutType, initProduct, false))
 	return out
 }
 
@@ -744,6 +936,9 @@ func minMaxKernels() (mm, mn, mx []exec.ScalarAggregateKernel) {
 		mn = append(mn, aggKernel(dt, exec.NewOutputType(dt), makeMinMaxInit(0), false))
 		mx = append(mx, aggKernel(dt, exec.NewOutputType(dt), makeMinMaxInit(1), false))
 	}
+	mm = appendDecimalKernels(mm, minMaxOutType, makeMinMaxInit(-1), false)
+	mn = appendDecimalKernels(mn, identityOutType, makeMinMaxInit(0), false)
+	mx = appendDecimalKernels(mx, identityOutType, makeMinMaxInit(1), false)
 	return
 }
 
@@ -975,6 +1170,9 @@ func firstLastKernels() (fl, first, last []exec.ScalarAggregateKernel) {
 		first = append(first, aggKernel(dt, exec.NewOutputType(dt), makeFirstLastInit(0), true))
 		last = append(last, aggKernel(dt, exec.NewOutputType(dt), makeFirstLastInit(1), true))
 	}
+	fl = appendDecimalKernels(fl, firstLastOutType, makeFirstLastInit(-1), true)
+	first = appendDecimalKernels(first, identityOutType, makeFirstLastInit(0), true)
+	last = appendDecimalKernels(last, identityOutType, makeFirstLastInit(1), true)
 	return
 }
 
@@ -1063,6 +1261,8 @@ func indexKernels() []exec.ScalarAggregateKernel {
 	for _, dt := range orderedTypes() {
 		out = append(out, aggKernel(dt, exec.NewOutputType(arrow.PrimitiveTypes.Int64), initIndex, true))
 	}
+	out = append(out, aggKernelMatched(exec.SameTypeID(arrow.DECIMAL128), exec.NewOutputType(arrow.PrimitiveTypes.Int64), initIndex, true))
+	out = append(out, aggKernelMatched(exec.SameTypeID(arrow.DECIMAL256), exec.NewOutputType(arrow.PrimitiveTypes.Int64), initIndex, true))
 	return out
 }
 
