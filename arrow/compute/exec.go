@@ -93,6 +93,12 @@ func execInternal(ctx context.Context, fn Function, opts FunctionOptions, passed
 			executor.Clear()
 			vectorExecPool.Put(executor.(*vectorExecutor))
 		}()
+	case FuncScalarAgg:
+		executor = scalarAggExecPool.Get().(*scalarAggExecutor)
+		defer func() {
+			executor.Clear()
+			scalarAggExecPool.Put(executor.(*scalarAggExecutor))
+		}()
 	default:
 		return nil, fmt.Errorf("%w: direct execution of %s", arrow.ErrNotImplemented, fn.Kind())
 	}
