@@ -111,6 +111,10 @@ func scalarToFloat64(sc scalar.Scalar) (float64, bool) {
 		return float64(v.Value), true
 	case *scalar.Float64:
 		return float64(v.Value), true
+	case *scalar.Decimal128:
+		return v.Value.ToFloat64(v.DataType().(*arrow.Decimal128Type).Scale), true
+	case *scalar.Decimal256:
+		return v.Value.ToFloat64(v.DataType().(*arrow.Decimal256Type).Scale), true
 	default:
 		return 0, false
 	}
@@ -214,18 +218,6 @@ func Quantile(ctx context.Context, opts QuantileOptions, values Datum) (Datum, e
 	out := bldr.NewArray()
 	defer out.Release()
 	return NewDatum(out), nil
-}
-
-// ApproximateMedian computes the median (0.5 quantile) of a numeric array.
-// Unlike the C++ tdigest-based implementation, the result is exact.
-func ApproximateMedian(ctx context.Context, opts ScalarAggregateOptions, values Datum) (Datum, error) {
-	qopts := QuantileOptions{
-		Q:             []float64{0.5},
-		Interpolation: InterpolationLinear,
-		SkipNulls:     opts.SkipNulls,
-		MinCount:      opts.MinCount,
-	}
-	return Quantile(ctx, qopts, values)
 }
 
 // Mode computes the most common value(s) of an array and returns a struct

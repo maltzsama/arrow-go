@@ -67,9 +67,7 @@ func TestApproximateMedian(t *testing.T) {
 		&compute.ArrayDatum{Value: in.Data()})
 	require.NoError(t, err)
 	defer res.Release()
-	expected := aggArray(t, mem, arrow.PrimitiveTypes.Float64, `[3]`)
-	defer expected.Release()
-	assertDatumsEqual(t, &compute.ArrayDatum{Value: expected.Data()}, res, nil, nil)
+	assert.InDelta(t, 3.0, aggScalar(t, res).(*scalar.Float64).Value, 1e-9)
 }
 
 func TestMode(t *testing.T) {
