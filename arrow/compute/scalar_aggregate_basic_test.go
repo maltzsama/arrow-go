@@ -333,3 +333,168 @@ func TestScalarAggregateChunked(t *testing.T) {
 	assert.True(t, scalar.Equals(scalar.NewInt32Scalar(1), st.Value[0]))
 	assert.True(t, scalar.Equals(scalar.NewInt32Scalar(4), st.Value[1]))
 }
+
+func TestDayTimeIntervalAgg(t *testing.T) {
+	mem := memory.NewCheckedAllocator(memory.DefaultAllocator)
+	defer mem.AssertSize(t, 0)
+	ctx := compute.WithAllocator(context.Background(), mem)
+	def := compute.DefaultScalarAggregateOptions()
+
+	in := aggArray(t, mem, arrow.FixedWidthTypes.DayTimeInterval,
+		`[{"days":3,"milliseconds":100}, {"days":1,"milliseconds":500}, {"days":2,"milliseconds":200}]`)
+	defer in.Release()
+
+	wantMin := scalar.NewDayTimeIntervalScalar(arrow.DayTimeInterval{Days: 1, Milliseconds: 500})
+	wantMax := scalar.NewDayTimeIntervalScalar(arrow.DayTimeInterval{Days: 3, Milliseconds: 100})
+
+	res, err := compute.MinMax(ctx, def, &compute.ArrayDatum{Value: in.Data()})
+	require.NoError(t, err)
+	defer res.Release()
+	st := aggScalar(t, res).(*scalar.Struct)
+	assert.True(t, scalar.Equals(wantMin, st.Value[0]))
+	assert.True(t, scalar.Equals(wantMax, st.Value[1]))
+
+	mn, err := compute.Min(ctx, def, &compute.ArrayDatum{Value: in.Data()})
+	require.NoError(t, err)
+	defer mn.Release()
+	assert.True(t, scalar.Equals(wantMin, aggScalar(t, mn)))
+
+	mx, err := compute.Max(ctx, def, &compute.ArrayDatum{Value: in.Data()})
+	require.NoError(t, err)
+	defer mx.Release()
+	assert.True(t, scalar.Equals(wantMax, aggScalar(t, mx)))
+
+	fl, err := compute.FirstLast(ctx, def, &compute.ArrayDatum{Value: in.Data()})
+	require.NoError(t, err)
+	defer fl.Release()
+	fst := aggScalar(t, fl).(*scalar.Struct)
+	assert.True(t, scalar.Equals(scalar.NewDayTimeIntervalScalar(arrow.DayTimeInterval{Days: 3, Milliseconds: 100}), fst.Value[0]))
+	assert.True(t, scalar.Equals(scalar.NewDayTimeIntervalScalar(arrow.DayTimeInterval{Days: 2, Milliseconds: 200}), fst.Value[1]))
+
+	first, err := compute.First(ctx, def, &compute.ArrayDatum{Value: in.Data()})
+	require.NoError(t, err)
+	defer first.Release()
+	assert.True(t, scalar.Equals(scalar.NewDayTimeIntervalScalar(arrow.DayTimeInterval{Days: 3, Milliseconds: 100}), aggScalar(t, first)))
+
+	last, err := compute.Last(ctx, def, &compute.ArrayDatum{Value: in.Data()})
+	require.NoError(t, err)
+	defer last.Release()
+	assert.True(t, scalar.Equals(scalar.NewDayTimeIntervalScalar(arrow.DayTimeInterval{Days: 2, Milliseconds: 200}), aggScalar(t, last)))
+
+	idx, err := compute.Index(ctx, compute.IndexOptions{Value: scalar.NewDayTimeIntervalScalar(arrow.DayTimeInterval{Days: 1, Milliseconds: 500})}, &compute.ArrayDatum{Value: in.Data()})
+	require.NoError(t, err)
+	defer idx.Release()
+	assert.True(t, scalar.Equals(scalar.NewInt64Scalar(1), aggScalar(t, idx)))
+}
+
+func TestMonthDayNanoIntervalAgg(t *testing.T) {
+	mem := memory.NewCheckedAllocator(memory.DefaultAllocator)
+	defer mem.AssertSize(t, 0)
+	ctx := compute.WithAllocator(context.Background(), mem)
+	def := compute.DefaultScalarAggregateOptions()
+
+	in := aggArray(t, mem, arrow.FixedWidthTypes.MonthDayNanoInterval,
+		`[{"months":3,"days":1,"nanoseconds":100}, {"months":1,"days":5,"nanoseconds":500}, {"months":2,"days":3,"nanoseconds":200}]`)
+	defer in.Release()
+
+	wantMin := scalar.NewMonthDayNanoIntervalScalar(arrow.MonthDayNanoInterval{Months: 1, Days: 5, Nanoseconds: 500})
+	wantMax := scalar.NewMonthDayNanoIntervalScalar(arrow.MonthDayNanoInterval{Months: 3, Days: 1, Nanoseconds: 100})
+
+	res, err := compute.MinMax(ctx, def, &compute.ArrayDatum{Value: in.Data()})
+	require.NoError(t, err)
+	defer res.Release()
+	st := aggScalar(t, res).(*scalar.Struct)
+	assert.True(t, scalar.Equals(wantMin, st.Value[0]))
+	assert.True(t, scalar.Equals(wantMax, st.Value[1]))
+
+	mn, err := compute.Min(ctx, def, &compute.ArrayDatum{Value: in.Data()})
+	require.NoError(t, err)
+	defer mn.Release()
+	assert.True(t, scalar.Equals(wantMin, aggScalar(t, mn)))
+
+	mx, err := compute.Max(ctx, def, &compute.ArrayDatum{Value: in.Data()})
+	require.NoError(t, err)
+	defer mx.Release()
+	assert.True(t, scalar.Equals(wantMax, aggScalar(t, mx)))
+
+	fl, err := compute.FirstLast(ctx, def, &compute.ArrayDatum{Value: in.Data()})
+	require.NoError(t, err)
+	defer fl.Release()
+	fst := aggScalar(t, fl).(*scalar.Struct)
+	assert.True(t, scalar.Equals(scalar.NewMonthDayNanoIntervalScalar(arrow.MonthDayNanoInterval{Months: 3, Days: 1, Nanoseconds: 100}), fst.Value[0]))
+	assert.True(t, scalar.Equals(scalar.NewMonthDayNanoIntervalScalar(arrow.MonthDayNanoInterval{Months: 2, Days: 3, Nanoseconds: 200}), fst.Value[1]))
+
+	first, err := compute.First(ctx, def, &compute.ArrayDatum{Value: in.Data()})
+	require.NoError(t, err)
+	defer first.Release()
+	assert.True(t, scalar.Equals(scalar.NewMonthDayNanoIntervalScalar(arrow.MonthDayNanoInterval{Months: 3, Days: 1, Nanoseconds: 100}), aggScalar(t, first)))
+
+	last, err := compute.Last(ctx, def, &compute.ArrayDatum{Value: in.Data()})
+	require.NoError(t, err)
+	defer last.Release()
+	assert.True(t, scalar.Equals(scalar.NewMonthDayNanoIntervalScalar(arrow.MonthDayNanoInterval{Months: 2, Days: 3, Nanoseconds: 200}), aggScalar(t, last)))
+
+	idx, err := compute.Index(ctx, compute.IndexOptions{Value: scalar.NewMonthDayNanoIntervalScalar(arrow.MonthDayNanoInterval{Months: 1, Days: 5, Nanoseconds: 500})}, &compute.ArrayDatum{Value: in.Data()})
+	require.NoError(t, err)
+	defer idx.Release()
+	assert.True(t, scalar.Equals(scalar.NewInt64Scalar(1), aggScalar(t, idx)))
+}
+
+func TestFixedSizeBinaryAgg(t *testing.T) {
+	mem := memory.NewCheckedAllocator(memory.DefaultAllocator)
+	defer mem.AssertSize(t, 0)
+	ctx := compute.WithAllocator(context.Background(), mem)
+	def := compute.DefaultScalarAggregateOptions()
+
+	// 2-byte fixed-size binary: [1,3], [1,2], [1,0]
+	fbType := &arrow.FixedSizeBinaryType{ByteWidth: 2}
+	bldr := array.NewFixedSizeBinaryBuilder(mem, fbType)
+	defer bldr.Release()
+	bldr.Append([]byte{1, 3})
+	bldr.Append([]byte{1, 2})
+	bldr.Append([]byte{1, 0})
+	in := bldr.NewArray()
+	defer in.Release()
+
+	wantMin := scalar.NewFixedSizeBinaryScalar(memory.NewBufferBytes([]byte{1, 0}), fbType)
+	wantMax := scalar.NewFixedSizeBinaryScalar(memory.NewBufferBytes([]byte{1, 3}), fbType)
+
+	res, err := compute.MinMax(ctx, def, &compute.ArrayDatum{Value: in.Data()})
+	require.NoError(t, err)
+	defer res.Release()
+	st := aggScalar(t, res).(*scalar.Struct)
+	assert.True(t, scalar.Equals(wantMin, st.Value[0]))
+	assert.True(t, scalar.Equals(wantMax, st.Value[1]))
+
+	mn, err := compute.Min(ctx, def, &compute.ArrayDatum{Value: in.Data()})
+	require.NoError(t, err)
+	defer mn.Release()
+	assert.True(t, scalar.Equals(wantMin, aggScalar(t, mn)))
+
+	mx, err := compute.Max(ctx, def, &compute.ArrayDatum{Value: in.Data()})
+	require.NoError(t, err)
+	defer mx.Release()
+	assert.True(t, scalar.Equals(wantMax, aggScalar(t, mx)))
+
+	fl, err := compute.FirstLast(ctx, def, &compute.ArrayDatum{Value: in.Data()})
+	require.NoError(t, err)
+	defer fl.Release()
+	fst := aggScalar(t, fl).(*scalar.Struct)
+	assert.True(t, scalar.Equals(scalar.NewFixedSizeBinaryScalar(memory.NewBufferBytes([]byte{1, 3}), fbType), fst.Value[0]))
+	assert.True(t, scalar.Equals(scalar.NewFixedSizeBinaryScalar(memory.NewBufferBytes([]byte{1, 0}), fbType), fst.Value[1]))
+
+	first, err := compute.First(ctx, def, &compute.ArrayDatum{Value: in.Data()})
+	require.NoError(t, err)
+	defer first.Release()
+	assert.True(t, scalar.Equals(scalar.NewFixedSizeBinaryScalar(memory.NewBufferBytes([]byte{1, 3}), fbType), aggScalar(t, first)))
+
+	last, err := compute.Last(ctx, def, &compute.ArrayDatum{Value: in.Data()})
+	require.NoError(t, err)
+	defer last.Release()
+	assert.True(t, scalar.Equals(scalar.NewFixedSizeBinaryScalar(memory.NewBufferBytes([]byte{1, 0}), fbType), aggScalar(t, last)))
+
+	idx, err := compute.Index(ctx, compute.IndexOptions{Value: scalar.NewFixedSizeBinaryScalar(memory.NewBufferBytes([]byte{1, 2}), fbType)}, &compute.ArrayDatum{Value: in.Data()})
+	require.NoError(t, err)
+	defer idx.Release()
+	assert.True(t, scalar.Equals(scalar.NewInt64Scalar(1), aggScalar(t, idx)))
+}
