@@ -30,6 +30,7 @@ import (
 	"github.com/apache/arrow-go/v18/arrow/bitutil"
 	"github.com/apache/arrow-go/v18/arrow/internal/debug"
 	"github.com/apache/arrow-go/v18/arrow/memory"
+	"github.com/apache/arrow-go/v18/arrow/scalar"
 )
 
 var hashSeed = maphash.MakeSeed()
@@ -734,3 +735,66 @@ func (s VectorKernel) GetNullHandling() NullHandling { return s.NullHandling }
 func (s VectorKernel) GetMemAlloc() MemAlloc         { return s.MemAlloc }
 func (s VectorKernel) CanFillSlices() bool           { return s.CanWriteIntoSlices }
 func (s VectorKernel) Cleanup() error                { return nil }
+
+// ----------------------------------------------------------------------
+// ScalarAggregateKernel (for ScalarAggregateFunction)
+
+// ScalarAggregateConsume processes an ExecSpan and updates the kernel
+// state stored in the KernelCtx.
+type ScalarAggregateConsume = func(*KernelCtx, *ExecSpan) error
+
+// ScalarAggregateMerge combines the source KernelState into the destination
+// KernelState. The destination is typically the state stored in the ctx.
+type ScalarAggregateMerge = func(*KernelCtx, KernelState, *KernelState) error
+
+// ScalarAggregateFinalize produces the end result of the aggregation using
+// the KernelState stored in the KernelCtx. It returns a Scalar to permit
+// aggregations with a scalar result (such as count) and to mirror the C++
+// Datum* output.
+type ScalarAggregateFinalize = func(*KernelCtx) (scalar.Scalar, error)
+
+// ScalarAggregateKernel is the kernel implementation for a ScalarAggregateFunction.
+// The four necessary components of an aggregation kernel are the init, consume,
+// merge, and finalize functions.
+//
+//   - init: creates a new KernelState for a kernel.
+//   - consume: processes an ExecSpan and updates the KernelState found in the
+//     KernelContext.
+//   - merge: combines one KernelState with another.
+//   - finalize: produces the end result of the aggregation using the KernelState
+//     in the KernelContext.
+type ScalarAggregateKernel struct {
+	kernel
+
+	Consume  ScalarAggregateConsume
+	Merge    ScalarAggregateMerge
+	Finalize ScalarAggregateFinalize
+
+	// Ordered indicates whether this kernel requires the input to be passed
+	// in a defined order (for example "first"/"last"). The caller of the
+	// aggregate kernel is responsible for passing data in some defined order.
+	Ordered bool
+}
+
+// NewScalarAggregateKernel constructs a new kernel for scalar aggregation,
+// constructing a KernelSignature with the provided input types and output type.
+func NewScalarAggregateKernel(in []InputType, out OutputType, init KernelInitFn, consume ScalarAggregateConsume, merge ScalarAggregateMerge, finalize ScalarAggregateFinalize, ordered bool) ScalarAggregateKernel {
+	return NewScalarAggregateKernelWithSig(&KernelSignature{
+		InputTypes: in,
+		OutType:    out,
+	}, init, consume, merge, finalize, ordered)
+}
+
+// NewScalarAggregateKernelWithSig is a convenience when you already have a
+// signature to use for constructing a kernel. It's equivalent to passing the
+// components of the signature (input and output types) to
+// NewScalarAggregateKernel.
+func NewScalarAggregateKernelWithSig(sig *KernelSignature, init KernelInitFn, consume ScalarAggregateConsume, merge ScalarAggregateMerge, finalize ScalarAggregateFinalize, ordered bool) ScalarAggregateKernel {
+	return ScalarAggregateKernel{
+		kernel:   kernel{Signature: sig, Init: init, Parallelizable: true},
+		Consume:  consume,
+		Merge:    merge,
+		Finalize: finalize,
+		Ordered:  ordered,
+	}
+}

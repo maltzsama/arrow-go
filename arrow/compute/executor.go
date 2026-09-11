@@ -918,6 +918,9 @@ var (
 	vectorExecPool = sync.Pool{
 		New: func() any { return &vectorExecutor{} },
 	}
+	scalarAggExecPool = sync.Pool{
+		New: func() any { return &scalarAggExecutor{} },
+	}
 )
 
 func checkCanExecuteChunked(k *exec.VectorKernel) error {
@@ -1217,6 +1220,93 @@ func (v *vectorExecutor) execChunked(batch *ExecBatch, out chan<- Datum) error {
 		if err := v.emitResult(r, out); err != nil {
 			return err
 		}
+	}
+	return nil
+}
+
+// scalarAggExecutor is the KernelExecutor for ScalarAggregateKernels. Unlike
+// the scalar and vector executors, it consumes each input span and produces a
+// single scalar result at the end.
+type scalarAggExecutor struct {
+	ctx     *exec.KernelCtx
+	ectx    ExecCtx
+	kernel  *exec.ScalarAggregateKernel
+	outType arrow.DataType
+}
+
+func (s *scalarAggExecutor) Clear() {
+	s.ctx, s.kernel, s.outType = nil, nil, nil
+}
+
+func (s *scalarAggExecutor) Init(ctx *exec.KernelCtx, args exec.KernelInitArgs) (err error) {
+	s.ctx, s.kernel = ctx, args.Kernel.(*exec.ScalarAggregateKernel)
+	s.outType, err = s.kernel.GetSig().OutType.Resolve(ctx, args.Inputs)
+	s.ectx = GetExecCtx(ctx.Ctx)
+	return
+}
+
+func (s *scalarAggExecutor) Execute(_ context.Context, batch *ExecBatch, data chan<- Datum) (err error) {
+	if batch.NumValues() > 0 {
+		var (
+			input exec.ExecSpan
+			iter  spanIterator
+			next  bool
+		)
+		if _, iter, err = iterateExecSpans(batch, s.ectx.ChunkSize, true); err != nil {
+			return
+		}
+		for {
+			if input, _, next = iter(); !next {
+				break
+			}
+			if err = s.kernel.Consume(s.ctx, &input); err != nil {
+				return
+			}
+		}
+	}
+
+	result, err := s.kernel.Finalize(s.ctx)
+	if err != nil {
+		return
+	}
+	data <- NewDatum(result)
+	return nil
+}
+
+// WrapResults waits for the single scalar result produced by Execute.
+func (s *scalarAggExecutor) WrapResults(ctx context.Context, out <-chan Datum, _ bool) Datum {
+	select {
+	case <-ctx.Done():
+		return nil
+	case result, ok := <-out:
+		if !ok || result == nil || ctx.Err() != nil {
+			if result != nil {
+				result.Release()
+			}
+			return nil
+		}
+
+		// wait for the channel to close so the producing goroutine has
+		// finished and no longer touches shared state.
+		select {
+		case <-ctx.Done():
+			result.Release()
+			return nil
+		case <-out:
+			if ctx.Err() != nil {
+				result.Release()
+				return nil
+			}
+			return result
+		}
+	}
+}
+
+func (s *scalarAggExecutor) CheckResultType(out Datum) error {
+	typ := out.(ArrayLikeDatum).Type()
+	if typ != nil && !arrow.TypeEqual(s.outType, typ) {
+		return fmt.Errorf("%w: kernel type result mismatch: declared as %s, actual is %s",
+			arrow.ErrType, s.outType, typ)
 	}
 	return nil
 }

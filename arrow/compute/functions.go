@@ -183,9 +183,9 @@ func (b *baseFunction) checkArity(nargs int) error {
 // generic definitions. It will be extended as other kernel types
 // are defined.
 //
-// Currently only ScalarKernels are allowed to be used.
+// Currently Scalar, Vector and ScalarAggregate kernels are allowed.
 type kernelType interface {
-	exec.ScalarKernel | exec.VectorKernel
+	exec.ScalarKernel | exec.VectorKernel | exec.ScalarAggregateKernel
 
 	// specifying the Kernel interface here allows us to utilize
 	// the methods of the Kernel interface on the generic
@@ -369,6 +369,60 @@ func (f *VectorFunction) AddKernel(kernel exec.VectorKernel) error {
 }
 
 func (f *VectorFunction) Execute(ctx context.Context, opts FunctionOptions, args ...Datum) (Datum, error) {
+	return execInternal(ctx, f, opts, -1, args...)
+}
+
+// A ScalarAggregateFunction is a function that computes a scalar summary
+// statistic from its inputs, and therefore whose result depends on the values
+// of the entire input rather than the value of each element. It accepts arrays,
+// chunked arrays and scalars and produces a single scalar result.
+type ScalarAggregateFunction struct {
+	funcImpl[exec.ScalarAggregateKernel]
+}
+
+// NewScalarAggregateFunction constructs a new ScalarAggregateFunction object
+// with the passed in name, arity and function doc.
+func NewScalarAggregateFunction(name string, arity Arity, doc FunctionDoc) *ScalarAggregateFunction {
+	return &ScalarAggregateFunction{
+		funcImpl: funcImpl[exec.ScalarAggregateKernel]{
+			baseFunction: baseFunction{
+				name:  name,
+				arity: arity,
+				doc:   doc,
+				kind:  FuncScalarAgg,
+			},
+		},
+	}
+}
+
+func (f *ScalarAggregateFunction) SetDefaultOptions(opts FunctionOptions) {
+	f.defaultOpts = opts
+}
+
+func (f *ScalarAggregateFunction) DispatchExact(vals ...arrow.DataType) (exec.Kernel, error) {
+	return f.funcImpl.DispatchExact(vals...)
+}
+
+func (f *ScalarAggregateFunction) DispatchBest(vals ...arrow.DataType) (exec.Kernel, error) {
+	return f.DispatchExact(vals...)
+}
+
+// AddKernel adds the provided kernel to the list of kernels this function has.
+func (f *ScalarAggregateFunction) AddKernel(k exec.ScalarAggregateKernel) error {
+	if err := f.checkArity(len(k.Signature.InputTypes)); err != nil {
+		return err
+	}
+
+	f.kernels = append(f.kernels, k)
+	return nil
+}
+
+// Execute uses the passed in context, function options and arguments to eagerly
+// execute the function using kernel dispatch, batch iteration and memory
+// allocation details as defined by the kernel.
+//
+// If opts is nil, then the DefaultOptions() will be used.
+func (f *ScalarAggregateFunction) Execute(ctx context.Context, opts FunctionOptions, args ...Datum) (Datum, error) {
 	return execInternal(ctx, f, opts, -1, args...)
 }
 

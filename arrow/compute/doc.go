@@ -29,12 +29,14 @@
 // comparisons, boolean logic, bit-wise operations, rounding, set lookup with
 // is_in, list_element and the null checks), vector functions (array_filter,
 // array_take, unique, dictionary_encode, cumulative_sum and the run-end
-// encode/decode functions) and the meta functions cast, filter, take, sort
-// and sort_indices that dispatch to them. Scalar aggregate functions (sum,
-// mean, min_max, count, any, all, variance and so on) and hash aggregate
-// functions (the hash_* family used for group-by) are not implemented yet:
-// FuncScalarAgg and FuncHashAgg exist as function kinds, but no function of
-// either kind is registered, and GetFunction returns false for their names.
+// encode/decode functions), the meta functions cast, filter, take, sort
+// and sort_indices that dispatch to them, and scalar aggregate functions.
+// The scalar aggregate functions count, count_distinct, sum, mean, product,
+// min_max, min, max, any, all, first_last, first, last, index, variance and
+// stddev are implemented. Hash aggregate functions (the hash_* family used
+// for group-by) are not implemented yet: FuncHashAgg exists as a function
+// kind, but no function of that kind is registered, and GetFunction returns
+// false for its names.
 package compute
 
 //go:generate go tool stringer -type=FuncKind -linecomment
