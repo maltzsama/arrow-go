@@ -223,13 +223,6 @@ func orderedTypes() []arrow.DataType {
 	return types
 }
 
-func maxU32(a, b uint32) uint32 {
-	if a > b {
-		return a
-	}
-	return b
-}
-
 // ----------------------------------------------------------------------
 // Sum
 
@@ -734,7 +727,7 @@ func makeMinMaxInit(field int) exec.KernelInitFn {
 		if err != nil {
 			return nil, err
 		}
-		return &minMaxState{opts: opts, field: field, effectiveMin: maxU32(1, opts.MinCount), acc: acc}, nil
+		return &minMaxState{opts: opts, field: field, effectiveMin: max(uint32(1), opts.MinCount), acc: acc}, nil
 	}
 }
 
@@ -965,7 +958,7 @@ func makeFirstLastInit(field int) exec.KernelInitFn {
 		if err != nil {
 			return nil, err
 		}
-		return &firstLastState{opts: opts, field: field, effectiveMin: maxU32(1, opts.MinCount), acc: acc}, nil
+		return &firstLastState{opts: opts, field: field, effectiveMin: max(uint32(1), opts.MinCount), acc: acc}, nil
 	}
 }
 

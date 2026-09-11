@@ -19,10 +19,11 @@
 package compute
 
 import (
+	"cmp"
 	"context"
 	"fmt"
 	"math"
-	"sort"
+	"slices"
 
 	"github.com/apache/arrow-go/v18/arrow"
 	"github.com/apache/arrow-go/v18/arrow/array"
@@ -175,7 +176,7 @@ func Quantile(ctx context.Context, opts QuantileOptions, values Datum) (Datum, e
 
 	nullResult := (!opts.SkipNulls && hasNulls) || len(points) < int(opts.MinCount)
 	if !nullResult {
-		sort.SliceStable(points, func(i, j int) bool { return points[i].f < points[j].f })
+		slices.SortStableFunc(points, func(a, b point) int { return cmp.Compare(a.f, b.f) })
 	}
 	for _, q := range qs {
 		if nullResult || len(points) == 0 {
@@ -245,7 +246,7 @@ func Mode(ctx context.Context, opts ModeOptions, values Datum) (Datum, error) {
 		sc    scalar.Scalar
 		count int64
 	}
-	counts := make(map[string]*entry)
+	counts := make(map[string]*entry, arr.Len())
 	var order []string
 	var hasNulls bool
 	var validCount int64
@@ -273,11 +274,8 @@ func Mode(ctx context.Context, opts ModeOptions, values Datum) (Datum, error) {
 		for _, key := range order {
 			entries = append(entries, counts[key])
 		}
-		sort.SliceStable(entries, func(i, j int) bool {
-			if entries[i].count != entries[j].count {
-				return entries[i].count > entries[j].count
-			}
-			return false
+		slices.SortStableFunc(entries, func(a, b *entry) int {
+			return cmp.Compare(b.count, a.count)
 		})
 		if int64(len(entries)) > n {
 			entries = entries[:n]

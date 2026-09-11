@@ -66,7 +66,7 @@ func groupRows(keys []arrow.Array, length int) ([][]int64, error) {
 	if length == 0 {
 		return nil, nil
 	}
-	ids := make(map[string]int32)
+	ids := make(map[string]int32, length)
 	var groups [][]int64
 	buf := make([]byte, 0, 32)
 	for i := 0; i < length; i++ {
